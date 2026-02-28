@@ -7,6 +7,17 @@ import re
 import tempfile
 from typing import Optional, Tuple, Dict, Any
 import yt_dlp
+
+# Set ffmpeg path before importing pydub
+ffmpeg_locations = [
+    os.path.join(os.environ.get('TEMP', ''), 'ffmpeg', 'ffmpeg-8.0.1-essentials_build', 'bin'),
+    r'C:\ffmpeg\bin'
+]
+for location in ffmpeg_locations:
+    if os.path.exists(location):
+        os.environ['PATH'] = location + os.pathsep + os.environ['PATH']
+        break
+
 from pydub import AudioSegment
 from pydub.utils import which
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
@@ -32,7 +43,10 @@ def _configure_ffmpeg():
     for ffmpeg_path in possible_paths:
         if ffmpeg_path and os.path.exists(ffmpeg_path):
             AudioSegment.converter = ffmpeg_path
+            AudioSegment.ffmpeg = ffmpeg_path
+            AudioSegment.ffprobe = ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe')
             logger.info(f"Configured pydub to use ffmpeg at: {ffmpeg_path}")
+            logger.info(f"Configured ffprobe at: {AudioSegment.ffprobe}")
             return True
     
     logger.warning("ffmpeg not found - audio conversion may not work")
@@ -237,36 +251,14 @@ class YouTubeService:
             return None
     
     async def transcribe_audio(self, audio_file_path: str) -> Optional[str]:
-        """Transcribe audio using Groq's Whisper API, fallback to local Whisper"""
+        """Transcribe audio using local Whisper model"""
         # Check file size
         file_size = os.path.getsize(audio_file_path)
         logger.info(f"Audio file size: {file_size} bytes ({file_size / (1024*1024):.2f} MB)")
         
-        # Try Groq's Whisper API first (whisper-large-v3-turbo)
-        try:
-            logger.info("Attempting transcription with Groq's Whisper API (whisper-large-v3-turbo)...")
-            
-            # Check file size limit for Groq API (25MB)
-            if file_size > 25 * 1024 * 1024:
-                logger.warning(f"File too large for Groq API ({file_size / (1024*1024):.2f} MB), trying local Whisper...")
-                return await self._transcribe_with_local_whisper(audio_file_path)
-            
-            # Open and send file to Groq
-            with open(audio_file_path, "rb") as audio_file:
-                transcription = self.groq_client.audio.transcriptions.create(
-                    file=(audio_file_path, audio_file.read()),
-                    model="whisper-large-v3",
-                    response_format="text",
-                    language="en",
-                    temperature=0.0
-                )
-            
-            logger.info("Groq Whisper API transcription completed successfully")
-            return transcription.strip()
-            
-        except Exception as e:
-            logger.warning(f"Groq Whisper API failed: {e}, falling back to local Whisper...")
-            return await self._transcribe_with_local_whisper(audio_file_path)
+        # Use local Whisper directly
+        logger.info("Using local Whisper model for transcription...")
+        return await self._transcribe_with_local_whisper(audio_file_path)
     
     async def _transcribe_with_local_whisper(self, audio_file_path: str) -> Optional[str]:
         """Fallback: Transcribe audio using local Whisper model"""
